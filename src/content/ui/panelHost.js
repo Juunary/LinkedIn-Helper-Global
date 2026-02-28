@@ -1,0 +1,236 @@
+window.LGH = window.LGH || {};
+
+/**
+ * PanelHost — creates and manages the single Shadow DOM host element that
+ * contains both translation panels. All extension UI lives inside this shadow root
+ * so that LinkedIn's styles cannot interfere and we never touch LinkedIn's own DOM.
+ *
+ * Only one host element is ever injected into document.body.
+ */
+window.LGH.PanelHost = (function () {
+  const HOST_ID = 'lgh-panel-host';
+
+  let _hostEl = null;
+  let _shadow = null;
+
+  // ── Base stylesheet injected into the shadow root ──────────────────────────
+  // All panel CSS lives here. LinkedIn's global styles never bleed in.
+  const BASE_CSS = `
+    :host {
+      all: initial;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    /* ── Panel shell ──────────────────────────────────────────── */
+    .lgh-panel {
+      position: fixed;
+      top: 52px;
+      width: 260px;
+      height: calc(100vh - 52px);
+      background: #ffffff;
+      border: 1px solid #d0dce8;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 9990;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font-size: 13px;
+      color: #1d2226;
+      transition: transform 0.22s ease, opacity 0.22s ease;
+    }
+
+    .lgh-panel--left  { left: 4px; }
+    .lgh-panel--right { right: 4px; width: 300px; }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    .lgh-panel__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      background: #0a66c2;
+      color: #ffffff;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .lgh-panel__title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .lgh-panel__toggle-btn {
+      background: none;
+      border: none;
+      color: #ffffff;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      opacity: 0.85;
+    }
+    .lgh-panel__toggle-btn:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+
+    /* ── Status bar ───────────────────────────────────────────── */
+    .lgh-panel__status {
+      font-size: 11px;
+      padding: 3px 10px;
+      background: #f3f6f8;
+      border-bottom: 1px solid #dce6f0;
+      color: #666666;
+      flex-shrink: 0;
+      min-height: 20px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .lgh-panel__status.lgh-status--loading { color: #0a66c2; }
+    .lgh-panel__status.lgh-status--error   { color: #b91c1c; }
+    .lgh-panel__status.lgh-status--ok      { color: #057642; }
+
+    /* ── Scrollable body ──────────────────────────────────────── */
+    .lgh-panel__body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      scroll-behavior: smooth;
+    }
+
+    /* ── Job list cards (left panel) ──────────────────────────── */
+    .lgh-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      background: #fafbfc;
+      transition: border-color 0.15s;
+    }
+    .lgh-card.lgh-loading {
+      opacity: 0.55;
+      border-style: dashed;
+    }
+    .lgh-card.lgh-error {
+      border-color: #fca5a5;
+      background: #fff5f5;
+    }
+    .lgh-card__title    { font-weight: 600; font-size: 13px; color: #0a66c2; margin-bottom: 2px; line-height: 1.3; }
+    .lgh-card__company  { font-size: 12px; color: #444444; }
+    .lgh-card__location { font-size: 11px; color: #777777; margin-top: 2px; }
+    .lgh-card__snippet  {
+      font-size: 11px; color: #555555; margin-top: 5px;
+      padding-top: 5px; border-top: 1px dashed #e0e0e0; line-height: 1.4;
+    }
+
+    /* ── Detail blocks (right panel) ─────────────────────────── */
+    .lgh-block { margin-bottom: 9px; line-height: 1.55; word-break: break-word; }
+    .lgh-block--heading1  { font-size: 16px; font-weight: 700; color: #1d2226; }
+    .lgh-block--heading2  { font-size: 14px; font-weight: 600; color: #1d2226; margin-top: 14px; }
+    .lgh-block--heading3  { font-size: 13px; font-weight: 600; color: #333333; margin-top: 10px; }
+    .lgh-block--label     { font-size: 12px; color: #555555; }
+    .lgh-block--paragraph { font-size: 13px; color: #1d2226; }
+    .lgh-block--list-item {
+      font-size: 13px; color: #1d2226;
+      padding-left: 16px; position: relative; margin-bottom: 4px;
+    }
+    .lgh-block--list-item::before {
+      content: "•"; position: absolute; left: 4px; color: #0a66c2;
+    }
+
+    /* ── FAB toggle buttons (shown on narrow screens) ─────────── */
+    .lgh-fab {
+      position: fixed;
+      z-index: 9991;
+      top: 56px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #0a66c2;
+      color: #ffffff;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+      display: none;          /* hidden by default — shown via media query */
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+      transition: background 0.15s;
+    }
+    .lgh-fab:hover { background: #004182; }
+    .lgh-fab--left  { left: 4px; }
+    .lgh-fab--right { right: 4px; }
+
+    /* ── Narrow screen: panels become slide-over overlays ─────── */
+    @media (max-width: 1280px) {
+      .lgh-fab { display: flex; }
+
+      .lgh-panel--left {
+        transform: translateX(calc(-100% - 12px));
+        opacity: 0;
+        pointer-events: none;
+      }
+      .lgh-panel--left.lgh-open {
+        transform: translateX(0);
+        opacity: 1;
+        pointer-events: auto;
+        z-index: 9995;
+        box-shadow: 0 4px 28px rgba(0,0,0,0.28);
+      }
+
+      .lgh-panel--right {
+        transform: translateX(calc(100% + 12px));
+        opacity: 0;
+        pointer-events: none;
+      }
+      .lgh-panel--right.lgh-open {
+        transform: translateX(0);
+        opacity: 1;
+        pointer-events: auto;
+        z-index: 9995;
+        box-shadow: 0 4px 28px rgba(0,0,0,0.28);
+      }
+    }
+  `;
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  function mount() {
+    if (document.getElementById(HOST_ID)) return; // already present
+
+    _hostEl = document.createElement('div');
+    _hostEl.id = HOST_ID;
+    // Deliberately set no style/class on _hostEl — all rendering is inside shadow DOM
+    document.body.appendChild(_hostEl);
+
+    _shadow = _hostEl.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = BASE_CSS;
+    _shadow.appendChild(style);
+  }
+
+  function unmount() {
+    if (_hostEl) {
+      _hostEl.remove();
+      _hostEl = null;
+      _shadow = null;
+    }
+  }
+
+  function getShadow()  { return _shadow; }
+  function getHostEl()  { return _hostEl; }
+  function isMounted()  { return _hostEl !== null; }
+
+  return { mount, unmount, getShadow, getHostEl, isMounted };
+})();

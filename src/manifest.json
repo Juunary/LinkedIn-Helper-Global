@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Global Helper",
+  "version": "1.0.0",
+  "description": "Non-destructive translation panels for LinkedIn job listings. Displays translated job cards and detail in side panels without modifying LinkedIn's DOM.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.linkedin.com/*"],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/jobs*"],
+      "js": [
+        "content/utils/throttle.js",
+        "content/utils/debounce.js",
+        "content/utils/jobIdUtils.js",
+        "content/extract/extractListCard.js",
+        "content/extract/extractDetailBlocks.js",
+        "content/ui/panelHost.js",
+        "content/ui/leftPanel.js",
+        "content/ui/rightPanel.js",
+        "content/sync/scrollSync.js",
+        "content/observers/routeObserver.js",
+        "content/observers/listObserver.js",
+        "content/observers/detailObserver.js",
+        "content/content_script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options/options.html"
+}

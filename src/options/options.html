@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LinkedIn Global Helper — Options</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+
+  <header>
+    <h1>LinkedIn Global Helper</h1>
+    <p class="subtitle">Translation settings</p>
+  </header>
+
+  <main>
+    <form id="options-form" novalidate>
+
+      <section>
+        <h2>Translation Provider</h2>
+
+        <div class="field">
+          <label for="provider">Provider</label>
+          <select id="provider" name="provider">
+            <option value="deepl">DeepL (recommended)</option>
+            <option value="google">Google Translate (stub)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="apiKey">API Key</label>
+          <input
+            type="password"
+            id="apiKey"
+            name="apiKey"
+            placeholder="Leave blank for identity fallback (no translation)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <small>
+            DeepL: get a free key at
+            <a href="https://www.deepl.com/pro#developer" target="_blank" rel="noopener">deepl.com/pro#developer</a>.
+            Free-tier keys end with <code>:fx</code>.
+            If left blank, original (untranslated) text is shown — useful for testing.
+          </small>
+        </div>
+
+        <div class="field">
+          <label for="targetLang">Target Language</label>
+          <select id="targetLang" name="targetLang">
+            <option value="KO">Korean (KO)</option>
+            <option value="JA">Japanese (JA)</option>
+            <option value="ZH">Chinese Simplified (ZH)</option>
+            <option value="ES">Spanish (ES)</option>
+            <option value="FR">French (FR)</option>
+            <option value="DE">German (DE)</option>
+            <option value="PT">Portuguese (PT)</option>
+            <option value="IT">Italian (IT)</option>
+            <option value="RU">Russian (RU)</option>
+            <option value="EN-US">English US (EN-US)</option>
+          </select>
+        </div>
+      </section>
+
+      <section>
+        <h2>Cache</h2>
+        <p class="hint">
+          Translations are cached locally so the same job is never translated twice.
+          Clear the cache if you change your target language or provider.
+        </p>
+        <div class="field field--inline">
+          <button type="button" id="clear-cache-btn">Clear Cache</button>
+          <span id="cache-status" role="status" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button type="submit" id="save-btn">Save Settings</button>
+        <span id="save-status" role="status" aria-live="polite"></span>
+      </div>
+
+    </form>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>
