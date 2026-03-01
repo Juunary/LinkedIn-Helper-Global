@@ -219,6 +219,32 @@ window.LGH.PanelHost = (function () {
     }
     .lgh-meta-row       { margin-bottom: 5px; }
     .lgh-meta__original    { font-size: 11px; color: #999999; line-height: 1.3; }
+    .lgh-meta__original--copyable {
+      cursor: pointer;
+      position: relative;
+      display: inline-block;
+      border-bottom: 1px dashed transparent;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .lgh-meta__original--copyable:hover {
+      color: #0a66c2;
+      border-bottom-color: #0a66c2;
+    }
+    .lgh-copy-toast {
+      position: absolute;
+      left: 0;
+      top: -22px;
+      background: #1d2226;
+      color: #fff;
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.4s ease;
+    }
+    .lgh-copy-toast--fade { opacity: 0; }
     .lgh-meta__translated  { font-size: 13px; font-weight: 600; color: #1d2226; line-height: 1.3; }
     .lgh-meta-row--title .lgh-meta__translated { font-size: 15px; color: #0a66c2; }
 

@@ -120,40 +120,51 @@ window.LGH.ListObserver = (function () {
     if (_intersectionObs) _intersectionObs.observe(cardEl);
   }
 
+  /**
+   * Attach hover listeners to a LinkedIn card element (idempotent).
+   * Re-extracts jobId at event time so recycled DOM elements work correctly.
+   */
+  function _attachHoverListeners(cardEl) {
+    if (!_onCardHover || _hoverAttachedEls.has(cardEl)) return;
+    _hoverAttachedEls.add(cardEl);
+    cardEl.addEventListener('mouseenter', () => {
+      if (!_onCardHover) return;
+      const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+      if (currentId) _onCardHover(currentId, true);
+    }, { passive: true });
+    cardEl.addEventListener('mouseleave', () => {
+      if (!_onCardHover) return;
+      const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+      if (currentId) _onCardHover(currentId, false);
+    }, { passive: true });
+  }
+
+  /**
+   * Try to request translation for a card. Returns true if successfully dispatched.
+   * Attaches hover listeners as a side-effect.
+   *
+   * NOTE: _requestedIds.add() is intentionally called AFTER payload extraction.
+   * If extraction fails (LinkedIn hasn't populated the card yet), jobId is NOT
+   * locked — so the next reflow triggered by MutationObserver will retry.
+   */
+  function _tryDispatch(cardEl) {
+    const jobId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+    if (!jobId || _requestedIds.has(jobId)) return false;
+
+    _attachHoverListeners(cardEl);
+
+    const payload = window.LGH.extractListCard(cardEl);
+    if (!payload || !payload.raw) return false; // card not yet populated — retry later
+
+    _requestedIds.add(jobId);
+    if (_onCardVisible) _onCardVisible(jobId, payload, cardEl);
+    return true;
+  }
+
   function _onIntersection(entries) {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-
-      const cardEl = entry.target;
-      const jobId = window.LGH.jobIdUtils.extractFromCard(cardEl);
-      if (!jobId) continue;
-
-      // Attach hover listeners to the LinkedIn card (once per element).
-      // IMPORTANT: re-extract jobId at event time — LinkedIn recycles DOM elements,
-      // so the element's data attribute may point to a different job by the time the
-      // event fires. Closing over `jobId` here would give stale highlights.
-      if (_onCardHover && !_hoverAttachedEls.has(cardEl)) {
-        _hoverAttachedEls.add(cardEl);
-        cardEl.addEventListener('mouseenter', () => {
-          if (!_onCardHover) return;
-          const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
-          if (currentId) _onCardHover(currentId, true);
-        }, { passive: true });
-        cardEl.addEventListener('mouseleave', () => {
-          if (!_onCardHover) return;
-          const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
-          if (currentId) _onCardHover(currentId, false);
-        }, { passive: true });
-      }
-
-      if (_requestedIds.has(jobId)) continue;
-
-      _requestedIds.add(jobId);
-
-      const payload = window.LGH.extractListCard(cardEl);
-      if (!payload || !payload.raw) continue;
-
-      if (_onCardVisible) _onCardVisible(jobId, payload, cardEl);
+      _tryDispatch(entry.target);
     }
   }
 
@@ -162,7 +173,22 @@ window.LGH.ListObserver = (function () {
   function _reflow() {
     if (!_active || !_container) return;
     const cards = _findCards(_container);
-    cards.forEach(_observeCard);
+
+    for (const cardEl of cards) {
+      _observeCard(cardEl); // register with IntersectionObserver (idempotent)
+
+      // Also directly check cards already in the viewport that haven't been
+      // dispatched yet. This catches LinkedIn's lazy content: the element enters
+      // the viewport before LinkedIn fills its inner HTML, so _onIntersection
+      // skips it (empty raw text). When LinkedIn later injects content the
+      // MutationObserver fires → _scheduleReflow → here → retry succeeds.
+      const jobId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+      if (!jobId || _requestedIds.has(jobId)) continue;
+
+      const rect = cardEl.getBoundingClientRect();
+      const inView = rect.top < window.innerHeight + 100 && rect.bottom > -100;
+      if (inView) _tryDispatch(cardEl);
+    }
   }
 
   const _scheduleReflow = window.LGH.debounce(

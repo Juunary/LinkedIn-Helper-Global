@@ -119,6 +119,25 @@ window.LGH.RightPanel = (function () {
     _bodyEl.appendChild(ph);
   }
 
+  // ── Copy toast helper ──────────────────────────────────────────────────────
+
+  function _showCopyToast(anchorEl) {
+    // Remove any existing toast
+    const existing = anchorEl.querySelector('.lgh-copy-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('span');
+    toast.className = 'lgh-copy-toast';
+    toast.textContent = 'Copied!';
+    anchorEl.appendChild(toast);
+
+    // Fade out and remove after 1.4 s
+    setTimeout(function () {
+      toast.classList.add('lgh-copy-toast--fade');
+      setTimeout(function () { toast.remove(); }, 400);
+    }, 1000);
+  }
+
   // ── Main render ────────────────────────────────────────────────────────────
 
   /**
@@ -174,8 +193,26 @@ window.LGH.RightPanel = (function () {
 
         if (orig) {
           const origEl = document.createElement('div');
-          origEl.className = 'lgh-meta__original';
+          origEl.className = 'lgh-meta__original lgh-meta__original--copyable';
           origEl.textContent = orig;
+          origEl.title = 'Click to copy';
+          origEl.addEventListener('click', function () {
+            navigator.clipboard.writeText(orig).then(function () {
+              _showCopyToast(origEl);
+            }).catch(function () {
+              // fallback for clipboard API unavailability
+              try {
+                const ta = document.createElement('textarea');
+                ta.value = orig;
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+                _showCopyToast(origEl);
+              } catch(_) {}
+            });
+          });
           row.appendChild(origEl);
         }
         if (tr) {
