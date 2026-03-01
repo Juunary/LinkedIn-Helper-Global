@@ -1,20 +1,23 @@
 window.LGH = window.LGH || {};
 
 /**
- * RightPanel — renders translated job detail blocks inside the right shadow-DOM panel.
+ * RightPanel — renders translated job detail inside the right shadow-DOM panel.
  *
- * When the user clicks a job on LinkedIn the detail pane changes. This panel
- * renders the translated version as structured blocks (headings / paragraphs / lists).
+ * Rendering strategy:
+ *   Meta section (title / company / location):
+ *     Each field shown as two lines — original on top (muted), translated below (bold).
+ *   Body section (description blocks):
+ *     Translated text only (no original duplicate).
  *
  * Public API:
  *   mount(shadowRoot)
  *   unmount()
  *   setStatus(msg, type?)
  *   showLoading(jobId)
- *   renderBlocks(jobId, blocks)   — blocks: [{type,level?,text,index}]
+ *   renderDetail(jobId, translated)   — translated: { meta, blocks }
  *   showError(jobId, errMsg)
  *   clearDetail()
- *   getBodyEl()                  — the scrollable container (used by ScrollSync)
+ *   getBodyEl()
  *   getPanelEl()
  *   getCurrentJobId() / setCurrentJobId(id)
  */
@@ -32,7 +35,6 @@ window.LGH.RightPanel = (function () {
   function mount(shadowRoot) {
     if (_panelEl) return; // idempotent
 
-    // FAB for narrow screens
     _fabEl = document.createElement('button');
     _fabEl.className = 'lgh-fab lgh-fab--right';
     _fabEl.setAttribute('aria-label', 'Toggle job detail translation panel');
@@ -41,13 +43,11 @@ window.LGH.RightPanel = (function () {
     _fabEl.addEventListener('click', _toggle);
     shadowRoot.appendChild(_fabEl);
 
-    // Panel shell
     _panelEl = document.createElement('div');
     _panelEl.className = 'lgh-panel lgh-panel--right';
     _panelEl.setAttribute('role', 'complementary');
     _panelEl.setAttribute('aria-label', 'Job Detail Translation');
 
-    // Header
     const headerEl = document.createElement('div');
     headerEl.className = 'lgh-panel__header';
 
@@ -65,12 +65,10 @@ window.LGH.RightPanel = (function () {
     headerEl.appendChild(titleSpan);
     headerEl.appendChild(toggleBtn);
 
-    // Status bar
     _statusEl = document.createElement('div');
     _statusEl.className = 'lgh-panel__status';
     _statusEl.textContent = 'Click a job to see translation';
 
-    // Scrollable body
     _bodyEl = document.createElement('div');
     _bodyEl.className = 'lgh-panel__body';
 
@@ -106,74 +104,165 @@ window.LGH.RightPanel = (function () {
     _statusEl.className = 'lgh-panel__status' + (type ? ` lgh-status--${type}` : '');
   }
 
-  // ── Detail rendering ───────────────────────────────────────────────────────
+  // ── Loading state ──────────────────────────────────────────────────────────
 
-  /** Show a loading state while translation is in-flight. */
   function showLoading(jobId) {
     _currentJobId = jobId;
     if (!_bodyEl) return;
     setStatus('Translating…', 'loading');
     _bodyEl.scrollTop = 0;
     _bodyEl.innerHTML = '';
-    const placeholder = document.createElement('div');
-    placeholder.className = 'lgh-block lgh-block--paragraph';
-    placeholder.style.color = '#999';
-    placeholder.textContent = 'Loading translation…';
-    _bodyEl.appendChild(placeholder);
+    const ph = document.createElement('div');
+    ph.className = 'lgh-block lgh-block--paragraph';
+    ph.style.color = '#999';
+    ph.textContent = 'Loading translation…';
+    _bodyEl.appendChild(ph);
   }
 
+  // ── Main render ────────────────────────────────────────────────────────────
+
   /**
-   * Render translated detail blocks.
+   * Render translated detail payload.
    * Stale responses (different jobId) are silently dropped.
    *
    * @param {string} jobId
-   * @param {Array<{type:string, level?:number, text:string, index:number}>} blocks
+   * @param {{
+   *   meta: {
+   *     title:    { original: string, translated: string },
+   *     company:  { original: string, translated: string },
+   *     location: { original: string, translated: string },
+   *   },
+   *   blocks: Array<{ type, level?, text, index }>
+   * }} translated
    */
-  function renderBlocks(jobId, blocks) {
+  function renderDetail(jobId, translated) {
     if (!_bodyEl) return;
     if (jobId !== _currentJobId) return; // stale — discard
 
     setStatus('Translation complete', 'ok');
     _bodyEl.innerHTML = '';
+    _bodyEl.scrollTop = 0;
 
-    if (!blocks || blocks.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'lgh-block lgh-block--paragraph';
-      empty.style.color = '#999';
-      empty.textContent = 'No translatable content found.';
-      _bodyEl.appendChild(empty);
+    if (!translated) {
+      _bodyEl.textContent = 'No content.';
       return;
     }
 
     const frag = document.createDocumentFragment();
-    for (const block of blocks) {
-      const el = document.createElement('div');
-      const level = block.level ? block.level : '';
-      el.className = `lgh-block lgh-block--${block.type}${level}`;
-      el.textContent = block.text || '';
-      el.dataset.blockIndex = String(block.index);
-      frag.appendChild(el);
+
+    // ── Meta section: original + translated dual-line ─────────────────────────
+    const { meta } = translated;
+    if (meta && (meta.title || meta.company || meta.location)) {
+      const metaSection = document.createElement('div');
+      metaSection.className = 'lgh-detail-meta';
+
+      const FIELDS = [
+        { key: 'title',    rowClass: 'lgh-meta-row--title' },
+        { key: 'company',  rowClass: '' },
+        { key: 'location', rowClass: '' },
+      ];
+
+      for (const { key, rowClass } of FIELDS) {
+        const field = meta[key];
+        if (!field) continue;
+        const orig = (typeof field === 'object') ? (field.original   || '') : '';
+        const tr   = (typeof field === 'object') ? (field.translated || '') : String(field);
+        if (!orig && !tr) continue;
+
+        const row = document.createElement('div');
+        row.className = ('lgh-meta-row ' + rowClass).trim();
+
+        if (orig) {
+          const origEl = document.createElement('div');
+          origEl.className = 'lgh-meta__original';
+          origEl.textContent = orig;
+          row.appendChild(origEl);
+        }
+        if (tr) {
+          const trEl = document.createElement('div');
+          trEl.className = 'lgh-meta__translated';
+          trEl.textContent = tr;
+          row.appendChild(trEl);
+        }
+        metaSection.appendChild(row);
+      }
+
+      frag.appendChild(metaSection);
     }
+
+    // ── Body blocks: translated only ──────────────────────────────────────────
+    const blocks = translated.blocks || [];
+    if (blocks.length > 0) {
+      const bodySection = document.createElement('div');
+      bodySection.className = 'lgh-detail-body';
+
+      for (const block of blocks) {
+        const el = document.createElement('div');
+        const level = block.level ? block.level : '';
+        el.className = `lgh-block lgh-block--${block.type}${level}`;
+        el.textContent = block.text || '';
+        el.dataset.blockIndex = String(block.index);
+        bodySection.appendChild(el);
+      }
+
+      frag.appendChild(bodySection);
+    }
+
+    if (!frag.childNodes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'lgh-block lgh-block--paragraph';
+      empty.style.color = '#999';
+      empty.textContent = 'No translatable content found.';
+      frag.appendChild(empty);
+    }
+
     _bodyEl.appendChild(frag);
-    _bodyEl.scrollTop = 0;
   }
 
-  /** Show a translation error message. */
+  // ── Error state ────────────────────────────────────────────────────────────
+
   function showError(jobId, errMsg) {
-    // Accept null jobId to clear any current job's error
     if (jobId && jobId !== _currentJobId) return;
-    setStatus('Translation failed — check API key in options', 'error');
-    if (_bodyEl) {
-      _bodyEl.innerHTML = '';
-      const errEl = document.createElement('div');
-      errEl.className = 'lgh-block lgh-block--paragraph';
-      errEl.style.color = '#b91c1c';
-      errEl.textContent = 'Error: ' + (errMsg || 'unknown error');
-      _bodyEl.appendChild(errEl);
+
+    const isNoKey = typeof errMsg === 'string' && errMsg.includes('NO_API_KEY');
+
+    if (isNoKey) {
+      setStatus('API key required · Open Options', 'error');
+      if (_bodyEl) {
+        _bodyEl.innerHTML = '';
+        const wrap = document.createElement('div');
+        wrap.className = 'lgh-block lgh-block--paragraph';
+        wrap.style.cssText = 'color:#b91c1c;line-height:1.6';
+
+        const msg = document.createElement('div');
+        msg.textContent = '⚠ No API key configured.';
+        msg.style.fontWeight = '600';
+
+        const detail = document.createElement('div');
+        detail.style.marginTop = '8px';
+        detail.textContent =
+          'Open the extension Options page and enter your DeepL (or Google) API key. ' +
+          'Then reload this page.';
+
+        wrap.appendChild(msg);
+        wrap.appendChild(detail);
+        _bodyEl.appendChild(wrap);
+      }
+    } else {
+      setStatus('Translation failed — check console for details', 'error');
+      if (_bodyEl) {
+        _bodyEl.innerHTML = '';
+        const errEl = document.createElement('div');
+        errEl.className = 'lgh-block lgh-block--paragraph';
+        errEl.style.color = '#b91c1c';
+        errEl.textContent = 'Error: ' + (errMsg || 'unknown error');
+        _bodyEl.appendChild(errEl);
+      }
     }
   }
 
-  /** Reset the panel — called on route change or job de-selection. */
+  // ── Reset ──────────────────────────────────────────────────────────────────
+
   function clearDetail() {
     _currentJobId = null;
     if (_bodyEl) _bodyEl.innerHTML = '';
@@ -182,17 +271,17 @@ window.LGH.RightPanel = (function () {
 
   // ── Accessors ──────────────────────────────────────────────────────────────
 
-  function getBodyEl()          { return _bodyEl; }
-  function getPanelEl()         { return _panelEl; }
-  function getCurrentJobId()    { return _currentJobId; }
-  function setCurrentJobId(id)  { _currentJobId = id; }
+  function getBodyEl()         { return _bodyEl; }
+  function getPanelEl()        { return _panelEl; }
+  function getCurrentJobId()   { return _currentJobId; }
+  function setCurrentJobId(id) { _currentJobId = id; }
 
   return {
     mount,
     unmount,
     setStatus,
     showLoading,
-    renderBlocks,
+    renderDetail,
     showError,
     clearDetail,
     getBodyEl,

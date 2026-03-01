@@ -4,18 +4,35 @@
  * Responsibilities:
  *  - Receive TRANSLATE messages from content scripts.
  *  - Check the LRU cache before calling the translation API.
- *  - Call the appropriate translator (DeepL | Google).
- *  - If no API key is configured, return the original text unchanged (identity mode).
+ *  - Call the appropriate translator (DeepL primary, Google stub).
+ *  - If no API key is configured, return original text unchanged (identity mode).
  *  - Respond with TRANSLATE_RESULT or TRANSLATE_ERROR.
  *
  * Message protocol (content → background):
  *   { type: "TRANSLATE", jobId, scope: "LIST"|"DETAIL", payload }
- *     LIST payload:   { text: string, structured: { title, company, location, snippet } }
- *     DETAIL payload: { blocks: [{type, level?, text, index}] }
+ *
+ *   LIST payload:
+ *     { text: string, structured: { title, company, location, snippet } }
+ *
+ *   DETAIL payload:
+ *     { meta: { title, company, location }, blocks: [{type, level?, text, index}] }
  *
  * Message protocol (background → content, via sendResponse):
- *   { type: "TRANSLATE_RESULT", jobId, scope, translated }
- *   { type: "TRANSLATE_ERROR",  jobId, scope, error }
+ *   LIST result:
+ *     { type: "TRANSLATE_RESULT", jobId, scope: "LIST",
+ *       translated: { title, company, location, snippet } }
+ *
+ *   DETAIL result:
+ *     { type: "TRANSLATE_RESULT", jobId, scope: "DETAIL",
+ *       translated: {
+ *         meta: {
+ *           title:    { original, translated },
+ *           company:  { original, translated },
+ *           location: { original, translated },
+ *         },
+ *         blocks: [{type, level?, text (translated), index}]
+ *       }
+ *     }
  */
 
 import * as Cache  from './cache/translationCache.js';
@@ -38,6 +55,9 @@ async function getSettings() {
 // ── Translation dispatcher ─────────────────────────────────────────────────
 
 /**
+ * Translate an array of texts in batches.
+ * Falls back to identity (original text) when apiKey is absent.
+ *
  * @param {string[]} texts
  * @param {string}   targetLang
  * @param {string}   apiKey
@@ -46,21 +66,18 @@ async function getSettings() {
  */
 async function callTranslator(texts, targetLang, apiKey, provider) {
   if (!apiKey) {
-    // Identity fallback — works for testing without any API key
-    return texts.map(t => t);
+    // Caller must check apiKey before reaching here; this is a safety net.
+    throw new Error('NO_API_KEY');
   }
 
-  const BATCH = 50; // max texts per API call
+  const BATCH   = 50;
   const results = [];
 
   for (let i = 0; i < texts.length; i += BATCH) {
     const chunk = texts.slice(i, i + BATCH);
-    let translated;
-    if (provider === 'google') {
-      translated = await Google.translate(chunk, targetLang, apiKey);
-    } else {
-      translated = await DeepL.translate(chunk, targetLang, apiKey);
-    }
+    const translated = provider === 'google'
+      ? await Google.translate(chunk, targetLang, apiKey)
+      : await DeepL.translate(chunk, targetLang, apiKey);
     results.push(...translated);
   }
 
@@ -70,7 +87,20 @@ async function callTranslator(texts, targetLang, apiKey, provider) {
 // ── LIST scope handler ─────────────────────────────────────────────────────
 
 async function handleList(jobId, payload, settings) {
-  const { lgh_apiKey: apiKey = '', lgh_targetLang: targetLang = 'KO', lgh_provider: provider = 'deepl' } = settings;
+  const {
+    lgh_apiKey:     apiKey     = '',
+    lgh_targetLang: targetLang = 'KO',
+    lgh_provider:   provider   = 'deepl',
+  } = settings;
+
+  // Explicit early-return for missing API key so the panel shows a clear message
+  if (!apiKey) {
+    console.log(LOG, 'LIST no API key for job', jobId);
+    return {
+      type: 'TRANSLATE_ERROR', jobId, scope: 'LIST',
+      error: 'NO_API_KEY: Open extension Options to add your DeepL or Google API key',
+    };
+  }
 
   const text       = (payload && payload.text)       || '';
   const structured = (payload && payload.structured) || {};
@@ -79,14 +109,13 @@ async function handleList(jobId, payload, settings) {
     return { type: 'TRANSLATE_RESULT', jobId, scope: 'LIST', translated: structured };
   }
 
-  // Cache check
+  // Cache check — key includes targetLang so different languages get separate entries
   const cached = await Cache.get(text, targetLang);
   if (cached) {
     console.log(LOG, 'cache hit LIST', jobId);
     return { type: 'TRANSLATE_RESULT', jobId, scope: 'LIST', translated: cached };
   }
 
-  // Build parts array for translation
   const parts = [
     structured.title    || '',
     structured.company  || '',
@@ -94,20 +123,15 @@ async function handleList(jobId, payload, settings) {
     structured.snippet  || '',
   ];
 
-  let translated;
-  try {
-    const results = await callTranslator(parts, targetLang, apiKey, provider);
-    translated = {
-      title:    results[0] !== undefined ? results[0] : parts[0],
-      company:  results[1] !== undefined ? results[1] : parts[1],
-      location: results[2] !== undefined ? results[2] : parts[2],
-      snippet:  results[3] !== undefined ? results[3] : parts[3],
-    };
-  } catch (err) {
-    throw err;
-  }
+  const results = await callTranslator(parts, targetLang, apiKey, provider);
 
-  // Only cache when we had an actual API key (not identity)
+  const translated = {
+    title:    results[0] !== undefined ? results[0] : parts[0],
+    company:  results[1] !== undefined ? results[1] : parts[1],
+    location: results[2] !== undefined ? results[2] : parts[2],
+    snippet:  results[3] !== undefined ? results[3] : parts[3],
+  };
+
   if (apiKey) await Cache.set(text, targetLang, translated);
 
   return { type: 'TRANSLATE_RESULT', jobId, scope: 'LIST', translated };
@@ -116,38 +140,77 @@ async function handleList(jobId, payload, settings) {
 // ── DETAIL scope handler ───────────────────────────────────────────────────
 
 async function handleDetail(jobId, payload, settings) {
-  const { lgh_apiKey: apiKey = '', lgh_targetLang: targetLang = 'KO', lgh_provider: provider = 'deepl' } = settings;
+  const {
+    lgh_apiKey:     apiKey     = '',
+    lgh_targetLang: targetLang = 'KO',
+    lgh_provider:   provider   = 'deepl',
+  } = settings;
 
-  const blocks = (payload && payload.blocks) || [];
-
-  if (blocks.length === 0) {
-    return { type: 'TRANSLATE_RESULT', jobId, scope: 'DETAIL', translated: { blocks: [] } };
+  // Explicit early-return for missing API key so the panel shows a clear message
+  if (!apiKey) {
+    console.log(LOG, 'DETAIL no API key for job', jobId);
+    return {
+      type: 'TRANSLATE_ERROR', jobId, scope: 'DETAIL',
+      error: 'NO_API_KEY: Open extension Options to add your DeepL or Google API key',
+    };
   }
 
-  // Cache key = hash of all block texts concatenated
-  const cacheText = blocks.map(b => b.text).join('\n');
-  const cached = await Cache.get(cacheText, targetLang);
+  // payload = { meta: {title, company, location}, blocks: [...] }
+  const meta   = (payload && payload.meta)   || {};
+  const blocks = (payload && payload.blocks) || [];
+
+  console.log(LOG, 'DETAIL request — job:', jobId,
+    '| targetLang:', targetLang,
+    '| provider:', provider,
+    '| blocks:', blocks.length,
+    '| meta title:', (meta.title || '').slice(0, 40));
+
+  const metaTexts = [
+    meta.title    || '',
+    meta.company  || '',
+    meta.location || '',
+  ];
+  const bodyTexts = blocks.map(b => b.text || '');
+  const allTexts  = [...metaTexts, ...bodyTexts];
+
+  if (allTexts.every(t => !t)) {
+    console.warn(LOG, 'DETAIL: all texts empty for job', jobId);
+    return {
+      type: 'TRANSLATE_RESULT', jobId, scope: 'DETAIL',
+      translated: { meta: {}, blocks: [] },
+    };
+  }
+
+  // Cache key covers all content (meta + body) so any text change invalidates it
+  const cacheKey = allTexts.join('\n');
+  const cached   = await Cache.get(cacheKey, targetLang);
   if (cached) {
     console.log(LOG, 'cache hit DETAIL', jobId);
     return { type: 'TRANSLATE_RESULT', jobId, scope: 'DETAIL', translated: cached };
   }
 
-  const texts = blocks.map(b => b.text || '');
-  let translatedTexts;
+  // Translate meta + body in a single batch for context preservation
+  const allTranslated = await callTranslator(allTexts, targetLang, apiKey, provider);
 
-  try {
-    translatedTexts = await callTranslator(texts, targetLang, apiKey, provider);
-  } catch (err) {
-    throw err;
-  }
+  const [tTitle, tCompany, tLocation, ...tBodyTexts] = allTranslated;
+
+  const translatedMeta = {
+    title:    { original: meta.title    || '', translated: tTitle    || '' },
+    company:  { original: meta.company  || '', translated: tCompany  || '' },
+    location: { original: meta.location || '', translated: tLocation || '' },
+  };
 
   const translatedBlocks = blocks.map((b, i) => ({
     ...b,
-    text: translatedTexts[i] !== undefined ? translatedTexts[i] : b.text,
+    text: tBodyTexts[i] !== undefined ? tBodyTexts[i] : b.text,
   }));
 
-  const result = { blocks: translatedBlocks };
-  if (apiKey) await Cache.set(cacheText, targetLang, result);
+  const result = { meta: translatedMeta, blocks: translatedBlocks };
+  await Cache.set(cacheKey, targetLang, result);
+
+  console.log(LOG, 'DETAIL response — job:', jobId,
+    '| translated blocks:', translatedBlocks.length,
+    '| targetLang:', targetLang);
 
   return { type: 'TRANSLATE_RESULT', jobId, scope: 'DETAIL', translated: result };
 }
@@ -159,12 +222,11 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
   const { jobId, scope, payload } = msg;
 
-  // Return true immediately to keep the message channel open for async response
   (async () => {
     let settings;
     try {
       settings = await getSettings();
-    } catch (err) {
+    } catch (_) {
       settings = {};
     }
 
@@ -184,5 +246,5 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     }
   })();
 
-  return true; // keep sendResponse channel open
+  return true; // keep sendResponse channel open for async response
 });

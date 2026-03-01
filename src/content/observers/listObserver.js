@@ -18,21 +18,52 @@ window.LGH = window.LGH || {};
  *   clearRequestedIds()      — reset on route change so new search re-translates all
  */
 window.LGH.ListObserver = (function () {
-  let _intersectionObs = null;
-  let _mutationObs     = null;
-  let _container       = null;
-  let _active          = false;
-  let _onCardVisible   = null;
-  let _attachRetries   = 0;
-  const MAX_RETRIES    = 15;
+  let _intersectionObs   = null;
+  let _mutationObs       = null;
+  let _container         = null;
+  let _active            = false;
+  let _onCardVisible     = null;
+  let _onContainerReady  = null;   // called once when scroll container is first found
+  let _onCardHover       = null;   // called on mouseenter/leave of a LinkedIn card
+  let _attachRetries     = 0;
+  const MAX_RETRIES      = 15;
 
   // Elements already handed to IntersectionObserver
   const _observedEls = new WeakSet();
+
+  // Elements that already have hover listeners attached
+  const _hoverAttachedEls = new WeakSet();
 
   // jobIds for which a translation has already been requested
   const _requestedIds = new Set();
 
   // ── Selectors (tried in priority order) ────────────────────────────────────
+
+  // ── Scroll-container selectors (for ListScrollSync) ──────────────────────
+
+  const SCROLL_CONTAINER_SELECTORS = [
+    '.scaffold-layout__list',
+    '.scaffold-layout__list-container',
+    '.jobs-search-results-list',
+    '.jobs-search__results-list',
+    '[class*="scaffold-layout__list"]',
+  ];
+
+  function findScrollContainer() {
+    for (const sel of SCROLL_CONTAINER_SELECTORS) {
+      try {
+        const el = document.querySelector(sel);
+        if (el && el.scrollHeight > el.clientHeight + 10) return el;
+      } catch (_) {}
+    }
+    // Fallback: container itself or its closest scrollable ancestor
+    let node = _container;
+    while (node && node !== document.documentElement) {
+      if (node.scrollHeight > node.clientHeight + 50 && node.clientHeight > 100) return node;
+      node = node.parentElement;
+    }
+    return _container || null;
+  }
 
   const LIST_CONTAINER_SELECTORS = [
     '.jobs-search-results-list',
@@ -96,6 +127,25 @@ window.LGH.ListObserver = (function () {
       const cardEl = entry.target;
       const jobId = window.LGH.jobIdUtils.extractFromCard(cardEl);
       if (!jobId) continue;
+
+      // Attach hover listeners to the LinkedIn card (once per element).
+      // IMPORTANT: re-extract jobId at event time — LinkedIn recycles DOM elements,
+      // so the element's data attribute may point to a different job by the time the
+      // event fires. Closing over `jobId` here would give stale highlights.
+      if (_onCardHover && !_hoverAttachedEls.has(cardEl)) {
+        _hoverAttachedEls.add(cardEl);
+        cardEl.addEventListener('mouseenter', () => {
+          if (!_onCardHover) return;
+          const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+          if (currentId) _onCardHover(currentId, true);
+        }, { passive: true });
+        cardEl.addEventListener('mouseleave', () => {
+          if (!_onCardHover) return;
+          const currentId = window.LGH.jobIdUtils.extractFromCard(cardEl);
+          if (currentId) _onCardHover(currentId, false);
+        }, { passive: true });
+      }
+
       if (_requestedIds.has(jobId)) continue;
 
       _requestedIds.add(jobId);
@@ -103,7 +153,7 @@ window.LGH.ListObserver = (function () {
       const payload = window.LGH.extractListCard(cardEl);
       if (!payload || !payload.raw) continue;
 
-      if (_onCardVisible) _onCardVisible(jobId, payload);
+      if (_onCardVisible) _onCardVisible(jobId, payload, cardEl);
     }
   }
 
@@ -149,16 +199,29 @@ window.LGH.ListObserver = (function () {
     _attachRetries = 0;
     _reflow();
     _setupMutationObs(_container);
+
+    // Notify caller so it can attach ListScrollSync
+    if (_onContainerReady) {
+      const scrollEl = findScrollContainer();
+      _onContainerReady(scrollEl);
+    }
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  function start(onCardVisible) {
+  /**
+   * @param {function} onCardVisible       — called per visible card
+   * @param {function} [onContainerReady]  — called once with scrollEl when container found
+   * @param {function} [onCardHover]       — called with (jobId, isEntering) on hover
+   */
+  function start(onCardVisible, onContainerReady, onCardHover) {
     if (_active) stop();
 
-    _onCardVisible  = onCardVisible;
-    _active         = true;
-    _attachRetries  = 0;
+    _onCardVisible    = onCardVisible;
+    _onContainerReady = onContainerReady || null;
+    _onCardHover      = onCardHover      || null;
+    _active           = true;
+    _attachRetries    = 0;
 
     _intersectionObs = new IntersectionObserver(_onIntersection, {
       threshold: 0.1,
@@ -172,10 +235,12 @@ window.LGH.ListObserver = (function () {
     _active = false;
     if (_intersectionObs) { _intersectionObs.disconnect(); _intersectionObs = null; }
     if (_mutationObs)     { _mutationObs.disconnect();     _mutationObs = null; }
-    _container     = null;
-    _onCardVisible = null;
+    _container        = null;
+    _onCardVisible    = null;
+    _onContainerReady = null;
+    _onCardHover      = null;
     _requestedIds.clear();
-    // Note: WeakSet (_observedEls) clears automatically as elements are GC'd
+    // Note: WeakSets (_observedEls, _hoverAttachedEls) clear automatically as elements are GC'd
   }
 
   function clearRequestedIds() {
@@ -184,5 +249,5 @@ window.LGH.ListObserver = (function () {
     if (_active) _scheduleReflow();
   }
 
-  return { start, stop, clearRequestedIds };
+  return { start, stop, clearRequestedIds, findScrollContainer };
 })();

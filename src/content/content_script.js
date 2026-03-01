@@ -11,10 +11,35 @@
 
   let _initialized = false;
 
+  // Version counter for DETAIL requests — incremented on each new request.
+  // The callback closes over its value at dispatch time and drops stale responses
+  // (rapid job switching / language change mid-flight).
+  let _detailReqId = 0;
+
+  // Tracks the "search context" (URL without currentJobId) so we can distinguish
+  // a job-card click (only currentJobId changes → keep list) from a real search
+  // change (different keywords / pagination → clear list).
+  let _lastSearchContext = '';
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   function isJobsPage() {
     return /linkedin\.com\/jobs/.test(location.href);
+  }
+
+  /**
+   * Returns a stable key for the current search context by stripping currentJobId
+   * from the URL. If two URLs produce the same key, only a job card was clicked
+   * (the search results list is unchanged).
+   */
+  function _getSearchContext(url) {
+    try {
+      const u = new URL(url);
+      u.searchParams.delete('currentJobId');
+      return u.pathname + '?' + u.searchParams.toString();
+    } catch (_) {
+      return url;
+    }
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -24,6 +49,7 @@
     if (!isJobsPage()) return;
 
     log('init', location.href);
+    _lastSearchContext = _getSearchContext(location.href);
 
     LGH.PanelHost.mount();
     const shadow = LGH.PanelHost.getShadow();
@@ -32,7 +58,19 @@
     LGH.LeftPanel.mount(shadow);
     LGH.RightPanel.mount(shadow);
 
-    LGH.ListObserver.start(_onCardVisible);
+    LGH.ListObserver.start(
+      _onCardVisible,
+      function (listScrollEl) {
+        const leftBody = LGH.LeftPanel.getBodyEl();
+        if (listScrollEl && leftBody) {
+          LGH.ListScrollSync.attach(listScrollEl, leftBody);
+          log('ListScrollSync attached to', listScrollEl.className || listScrollEl.tagName);
+        }
+      },
+      function (jobId, isEntering) {
+        LGH.LeftPanel.highlightCard(jobId, isEntering);
+      }
+    );
     LGH.DetailObserver.start(_onDetailChange);
 
     _initialized = true;
@@ -45,18 +83,14 @@
     LGH.DetailObserver.stop();
     LGH.ListObserver.stop();
     LGH.ScrollSync.detach();
+    LGH.ListScrollSync.detach();
 
     LGH.LeftPanel.unmount();
     LGH.RightPanel.unmount();
     LGH.PanelHost.unmount();
 
+    _lastSearchContext = '';
     _initialized = false;
-  }
-
-  function reinit() {
-    destroy();
-    // Small pause to let LinkedIn's SPA finish rendering the new route
-    setTimeout(init, 350);
   }
 
   // ── Observer callbacks ─────────────────────────────────────────────────────
@@ -66,8 +100,9 @@
    * @param {string} jobId
    * @param {{ title, company, location, snippet, raw }} payload
    */
-  function _onCardVisible(jobId, payload) {
+  function _onCardVisible(jobId, payload, linkedinCardEl) {
     LGH.LeftPanel.markLoading(jobId, payload);
+    if (linkedinCardEl) LGH.LeftPanel.bindLinkedInCard(jobId, linkedinCardEl);
 
     _sendTranslate({
       jobId,
@@ -77,7 +112,7 @@
       if (!response) return;
       if (response.type === 'TRANSLATE_RESULT') {
         LGH.LeftPanel.renderTranslation(response.jobId, response.translated);
-        LGH.LeftPanel.setStatus('Translated ' + _cardCountLabel(), 'ok');
+        LGH.LeftPanel.setStatus('Translated', 'ok');
       } else if (response.type === 'TRANSLATE_ERROR') {
         LGH.LeftPanel.markError(response.jobId, response.error || 'error');
         LGH.LeftPanel.setStatus('Translation error', 'error');
@@ -87,12 +122,18 @@
 
   /**
    * Called by DetailObserver when the visible job detail changes.
+   * detailPayload = { meta: {title, company, location}, blocks: [...] }
+   *
    * @param {string} jobId
-   * @param {Array}  blocks
+   * @param {{ meta: {title,company,location}, blocks: Array }} detailPayload
    * @param {Element|null} scrollEl
    */
-  function _onDetailChange(jobId, blocks, scrollEl) {
-    log('detail change', jobId, blocks.length, 'blocks');
+  function _onDetailChange(jobId, detailPayload, scrollEl) {
+    log('detail change', jobId,
+        'blocks:', (detailPayload && detailPayload.blocks && detailPayload.blocks.length) || 0);
+
+    // Bump version — in-flight responses for the previous job will be dropped
+    const myReqId = ++_detailReqId;
 
     LGH.RightPanel.setCurrentJobId(jobId);
     LGH.RightPanel.showLoading(jobId);
@@ -106,11 +147,14 @@
     _sendTranslate({
       jobId,
       scope:   'DETAIL',
-      payload: { blocks },
+      payload: detailPayload,   // { meta: {...}, blocks: [...] }
     }, function (response) {
+      // Drop stale: user switched job or changed language between dispatch and callback
+      if (_detailReqId !== myReqId) return;
+
       if (!response) return;
       if (response.type === 'TRANSLATE_RESULT') {
-        LGH.RightPanel.renderBlocks(response.jobId, response.translated.blocks || []);
+        LGH.RightPanel.renderDetail(response.jobId, response.translated);
       } else if (response.type === 'TRANSLATE_ERROR') {
         LGH.RightPanel.showError(response.jobId, response.error || 'error');
       }
@@ -119,17 +163,12 @@
 
   // ── Messaging ──────────────────────────────────────────────────────────────
 
-  /**
-   * Send a TRANSLATE message to the background service worker.
-   * The callback receives the TRANSLATE_RESULT / TRANSLATE_ERROR response.
-   */
   function _sendTranslate(msg, callback) {
     try {
       chrome.runtime.sendMessage(
         { type: 'TRANSLATE', ...msg },
         function (response) {
           if (chrome.runtime.lastError) {
-            // Background service worker may have been inactive — log and continue
             warn('sendMessage error:', chrome.runtime.lastError.message);
             return;
           }
@@ -141,6 +180,29 @@
     }
   }
 
+  // ── Language change controller ─────────────────────────────────────────────
+
+  /**
+   * Called by LeftPanel's language selector after the new lang is saved to storage.
+   * Resets both panels and forces re-translation at the new target language.
+   * Exposed on window.LGH so leftPanel.js can call it without circular imports.
+   *
+   * @param {string} lang  — new language code (storage already updated by caller)
+   */
+  window.LGH.onLanguageChange = function (lang) {
+    log('language changed to', lang);
+
+    // List panel: clear cards so IntersectionObserver re-fires for all visible cards
+    LGH.LeftPanel.clearCards();
+    LGH.ListObserver.clearRequestedIds();
+
+    // Detail panel: force immediate re-extract + re-translate (no DOM mutation needed)
+    LGH.RightPanel.clearDetail();
+    LGH.ScrollSync.detach();
+    LGH.DetailObserver.resetLastJobId();
+    LGH.DetailObserver.retrigger();
+  };
+
   // ── Route change handling ──────────────────────────────────────────────────
 
   LGH.RouteObserver.start(function (newUrl) {
@@ -150,15 +212,30 @@
       if (!_initialized) {
         init();
       } else {
-        // Same Jobs section, different search/job — reset without full teardown
+        const newCtx = _getSearchContext(newUrl);
+        const searchChanged = newCtx !== _lastSearchContext;
+        _lastSearchContext = newCtx;
+
+        // Detail always resets on any navigation
         LGH.DetailObserver.resetLastJobId();
-        LGH.ListObserver.clearRequestedIds();
-        LGH.LeftPanel.clearCards();
         LGH.RightPanel.clearDetail();
         LGH.ScrollSync.detach();
+
+        // List only resets when the search results themselves changed
+        if (searchChanged) {
+          log('search context changed — clearing list');
+          LGH.ListObserver.clearRequestedIds();
+          LGH.LeftPanel.clearCards();
+          // Detach and re-attach list scroll sync (container may be rebuilt)
+          LGH.ListScrollSync.detach();
+          setTimeout(function () {
+            const scrollEl = LGH.ListObserver.findScrollContainer();
+            const leftBody = LGH.LeftPanel.getBodyEl();
+            if (scrollEl && leftBody) LGH.ListScrollSync.attach(scrollEl, leftBody);
+          }, 800);
+        }
       }
     } else {
-      // Left the Jobs section entirely
       destroy();
     }
   });
@@ -166,14 +243,5 @@
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   init();
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
-  let _cardCount = 0;
-  const _origOnCardVisible = _onCardVisible;
-
-  function _cardCountLabel() {
-    return ''; // placeholder; could be wired to _cardMap size
-  }
 
 })();

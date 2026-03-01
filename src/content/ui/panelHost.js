@@ -125,6 +125,15 @@ window.LGH.PanelHost = (function () {
       border-color: #fca5a5;
       background: #fff5f5;
     }
+    .lgh-card {
+      transition: background-color 0.15s ease;
+      cursor: default;
+    }
+    .lgh-card:hover,
+    .lgh-card.lgh-highlight {
+      background-color: #d1fae5;
+      border-color: #6ee7b7;
+    }
     .lgh-card__title    { font-weight: 600; font-size: 13px; color: #0a66c2; margin-bottom: 2px; line-height: 1.3; }
     .lgh-card__company  { font-size: 12px; color: #444444; }
     .lgh-card__location { font-size: 11px; color: #777777; margin-top: 2px; }
@@ -147,6 +156,71 @@ window.LGH.PanelHost = (function () {
     .lgh-block--list-item::before {
       content: "•"; position: absolute; left: 4px; color: #0a66c2;
     }
+
+    /* ── Language selector (in left panel header) ─────────────── */
+    .lgh-lang-wrap {
+      position: relative;
+      flex-shrink: 0;
+      margin-right: 4px;
+    }
+    .lgh-lang-btn {
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.35);
+      color: #ffffff;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      white-space: nowrap;
+    }
+    .lgh-lang-btn:hover { background: rgba(255,255,255,0.28); }
+    .lgh-lang-btn__caret { font-size: 9px; opacity: 0.8; }
+
+    .lgh-lang-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 130px;
+      background: #ffffff;
+      border: 1px solid #d0dce8;
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      z-index: 99999;
+      overflow: hidden;
+    }
+    .lgh-lang-dropdown.lgh-open { display: block; }
+
+    .lgh-lang-option {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 11px;
+      font-size: 12px;
+      color: #1d2226;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.1s;
+    }
+    .lgh-lang-option:hover   { background: #f0f5fb; }
+    .lgh-lang-option.active  { background: #e8f0fb; font-weight: 600; color: #0a66c2; }
+    .lgh-lang-option__flag   { font-size: 16px; line-height: 1; }
+    .lgh-lang-option__label  { flex: 1; }
+
+    /* ── Detail meta section (right panel) ─────────────────────── */
+    .lgh-detail-meta {
+      padding-bottom: 10px;
+      border-bottom: 1px solid #e2e8f0;
+      margin-bottom: 10px;
+    }
+    .lgh-meta-row       { margin-bottom: 5px; }
+    .lgh-meta__original    { font-size: 11px; color: #999999; line-height: 1.3; }
+    .lgh-meta__translated  { font-size: 13px; font-weight: 600; color: #1d2226; line-height: 1.3; }
+    .lgh-meta-row--title .lgh-meta__translated { font-size: 15px; color: #0a66c2; }
 
     /* ── FAB toggle buttons (shown on narrow screens) ─────────── */
     .lgh-fab {

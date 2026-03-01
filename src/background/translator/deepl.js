@@ -30,7 +30,6 @@ async function translate(texts, targetLang, apiKey) {
   // Build application/x-www-form-urlencoded body
   const params = new URLSearchParams();
   params.append('target_lang', targetLang.toUpperCase());
-  params.append('tag_handling', 'text');
   for (const t of texts) {
     params.append('text', String(t));
   }

@@ -4,7 +4,12 @@
   "version": "1.0.0",
   "description": "Non-destructive translation panels for LinkedIn job listings. Displays translated job cards and detail in side panels without modifying LinkedIn's DOM.",
   "permissions": ["storage"],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://api-free.deepl.com/*",
+    "https://api.deepl.com/*",
+    "https://translation.googleapis.com/*"
+  ],
   "background": {
     "service_worker": "background/background.js",
     "type": "module"

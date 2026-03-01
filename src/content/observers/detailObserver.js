@@ -20,13 +20,14 @@ window.LGH = window.LGH || {};
  *   findScrollContainer()    — returns the scrollable detail element (or null)
  */
 window.LGH.DetailObserver = (function () {
-  let _mutationObs     = null;
-  let _container       = null;
-  let _active          = false;
-  let _lastJobId       = null;
-  let _onDetailChange  = null;
-  let _attachRetries   = 0;
-  let _keepAliveTimer  = null;
+  let _mutationObs          = null;
+  let _container            = null;
+  let _active               = false;
+  let _lastJobId            = null;
+  let _lastJobFullyExtracted = false; // true once we've fired with a full description
+  let _onDetailChange       = null;
+  let _attachRetries        = 0;
+  let _keepAliveTimer       = null;
 
   // Fast retry phase: every 600 ms for up to FAST_RETRIES attempts
   const FAST_RETRIES      = 20;
@@ -157,6 +158,43 @@ window.LGH.DetailObserver = (function () {
     return null;
   }
 
+  // ── Description-ready detection ────────────────────────────────────────────
+
+  // Minimum characters in the description element before we consider it loaded.
+  // This prevents firing on the skeleton/placeholder state.
+  const MIN_DESC_CHARS = 50;
+
+  // Selectors for the description body — tried in priority order.
+  // IMPORTANT: [class*="job-description"] does NOT match "jobs-description__details"
+  // because "job-description" is not a substring of "jobs-description" (the 's' differs).
+  // Selectors below are explicit.
+  const DESC_READY_SELECTORS = [
+    '.jobs-description__details',
+    '[class*="jobs-description__details"]',
+    '#job-details',
+    '.jobs-description-content__text',
+    '.jobs-description-content',
+    '.jobs-box__html-content',
+  ];
+
+  function _getDescriptionText() {
+    if (!_container) return '';
+    for (const sel of DESC_READY_SELECTORS) {
+      try {
+        const el = _container.querySelector(sel);
+        if (el) {
+          const t = (el.textContent || '').trim();
+          if (t.length > 0) return t;
+        }
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  function _descriptionIsReady() {
+    return _getDescriptionText().length >= MIN_DESC_CHARS;
+  }
+
   // ── Scheduled check ────────────────────────────────────────────────────────
 
   function _checkDetailChange() {
@@ -164,14 +202,43 @@ window.LGH.DetailObserver = (function () {
 
     const jobId = _detectJobId();
     if (!jobId) return;
-    if (jobId === _lastJobId) return;
 
-    _lastJobId = jobId;
+    const newJob = jobId !== _lastJobId;
+    if (newJob) {
+      // Switched to a different job — reset extraction state
+      _lastJobId             = jobId;
+      _lastJobFullyExtracted = false;
+      console.log('[LGH] DetailObserver: new job detected', jobId);
+    }
 
-    const blocks   = window.LGH.extractDetailBlocks(_container);
-    const scrollEl = findScrollContainer();
+    // Already fired with a complete description for this job — nothing to do
+    if (!newJob && _lastJobFullyExtracted) return;
 
-    if (_onDetailChange) _onDetailChange(jobId, blocks, scrollEl);
+    // Gate: wait until LinkedIn has populated the description pane
+    const descText = _getDescriptionText();
+    const ready    = descText.length >= MIN_DESC_CHARS;
+
+    if (!ready) {
+      console.log('[LGH] DetailObserver: description not ready yet for job', jobId,
+        '(len=' + descText.length + ') — waiting for MutationObserver re-trigger');
+      // MutationObserver will call _scheduleCheck again as content loads.
+      // No polling needed — just return and let mutations drive retries.
+      return;
+    }
+
+    // Description is ready — extract and fire (once per job)
+    _lastJobFullyExtracted = true;
+
+    const detailPayload = window.LGH.extractDetailBlocks(_container);
+    const scrollEl      = findScrollContainer();
+
+    console.log('[LGH] DetailObserver: firing callback — job:', jobId,
+      '| desc chars:', descText.length,
+      '| blocks extracted:', detailPayload.blocks.length,
+      '| meta title:', (detailPayload.meta && detailPayload.meta.title
+        ? detailPayload.meta.title.slice(0, 50) : '(none)'));
+
+    if (_onDetailChange) _onDetailChange(jobId, detailPayload, scrollEl);
   }
 
   const _scheduleCheck = window.LGH.debounce(
@@ -242,10 +309,11 @@ window.LGH.DetailObserver = (function () {
   function start(onDetailChange) {
     if (_active) stop();
 
-    _onDetailChange = onDetailChange;
-    _active         = true;
-    _lastJobId      = null;
-    _attachRetries  = 0;
+    _onDetailChange        = onDetailChange;
+    _active                = true;
+    _lastJobId             = null;
+    _lastJobFullyExtracted = false;
+    _attachRetries         = 0;
 
     _tryAttach();
   }
@@ -254,16 +322,30 @@ window.LGH.DetailObserver = (function () {
     _active = false;
     _stopKeepAlive();
     if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
-    _container      = null;
-    _lastJobId      = null;
-    _onDetailChange = null;
+    _container             = null;
+    _lastJobId             = null;
+    _lastJobFullyExtracted = false;
+    _onDetailChange        = null;
   }
 
   function resetLastJobId() {
-    _lastJobId = null;
+    _lastJobId             = null;
+    _lastJobFullyExtracted = false;
     // If we already have a container, re-check immediately
     if (_container && _active) _scheduleCheck();
   }
 
-  return { start, stop, resetLastJobId, findScrollContainer };
+  /**
+   * Force an immediate re-check without waiting for a DOM mutation.
+   * Used when the target language changes — content hasn't mutated but
+   * we still need to re-extract and re-translate the current job.
+   */
+  function retrigger() {
+    if (_active && _container) {
+      _lastJobFullyExtracted = false; // allow re-fire for same jobId
+      _checkDetailChange();
+    }
+  }
+
+  return { start, stop, resetLastJobId, retrigger, findScrollContainer };
 })();

@@ -1,20 +1,26 @@
 window.LGH = window.LGH || {};
 
 /**
- * LeftPanel — renders translated job list cards inside the left shadow-DOM panel.
+ * LeftPanel — renders translated job list cards + hosts the language selector.
  *
- * Each visible job card from LinkedIn gets a corresponding translated card here.
- * Cards are keyed by jobId so they survive LinkedIn's virtualised list recycling.
+ * Header layout:  [Job List · Translation]  [🇰🇷▾]  [×]
+ *
+ * Language selector:
+ *   - Reads/writes `lgh_targetLang` in chrome.storage.local.
+ *   - On selection calls window.LGH.onLanguageChange(code) so content_script.js
+ *     can clear caches and re-trigger translation for both panels.
+ *   - Click-outside closes the dropdown.
  *
  * Public API:
  *   mount(shadowRoot)
  *   unmount()
- *   setStatus(msg, type?)        — type: 'loading'|'error'|'ok'|''
- *   markLoading(jobId, rawData)  — show placeholder while translation is in-flight
- *   renderTranslation(jobId, translated) — fill in translated fields
+ *   setStatus(msg, type?)
+ *   markLoading(jobId, rawData)
+ *   renderTranslation(jobId, translated)
  *   markError(jobId, errMsg)
- *   clearCards()                 — reset for route change
- *   getBodyEl()                  — scroll container (for scroll-sync if needed)
+ *   clearCards()
+ *   updateLangDisplay(code)   — sync flag button without opening dropdown
+ *   getBodyEl()
  */
 window.LGH.LeftPanel = (function () {
   let _panelEl  = null;
@@ -24,15 +30,122 @@ window.LGH.LeftPanel = (function () {
   let _fabEl    = null;
   let _isOpen   = false;
 
+  let _langBtnFlagEl  = null;
+  let _langDropdownEl = null;
+  let _currentLang    = 'KO';
+
   // jobId → card DOM element
   const _cardMap = new Map();
+
+  // jobId → original LinkedIn card element (for click-through)
+  const _linkedinCardMap = new Map();
+
+  // Currently highlighted jobId (to clear stale highlights safely)
+  let _highlightedJobId = null;
+
+  // ── Language definitions ───────────────────────────────────────────────────
+
+  const LANGUAGES = [
+    { code: 'KO',    flag: '🇰🇷', label: '한국어'  },
+    { code: 'EN-US', flag: '🇺🇸', label: 'English' },
+    { code: 'JA',    flag: '🇯🇵', label: '日本語'  },
+    { code: 'ZH',    flag: '🇨🇳', label: '中文'    },
+    { code: 'DE',    flag: '🇩🇪', label: 'Deutsch'  },
+    { code: 'ES',    flag: '🇪🇸', label: 'Español'  },
+  ];
+
+  function _flagForCode(code) {
+    const found = LANGUAGES.find(l => l.code === code);
+    return found ? found.flag : '🌐';
+  }
+
+  // ── Language selector ──────────────────────────────────────────────────────
+
+  function _buildLangSelector() {
+    const wrap = document.createElement('div');
+    wrap.className = 'lgh-lang-wrap';
+
+    // Button showing current flag
+    const btn = document.createElement('button');
+    btn.className = 'lgh-lang-btn';
+    btn.setAttribute('aria-label', 'Select translation language');
+    btn.setAttribute('title', 'Change target language');
+
+    _langBtnFlagEl = document.createElement('span');
+    _langBtnFlagEl.className = 'lgh-lang-btn__flag';
+    _langBtnFlagEl.textContent = _flagForCode(_currentLang);
+
+    const caret = document.createElement('span');
+    caret.className = 'lgh-lang-btn__caret';
+    caret.textContent = '▾';
+
+    btn.appendChild(_langBtnFlagEl);
+    btn.appendChild(caret);
+    btn.addEventListener('click', _toggleDropdown);
+
+    // Dropdown list
+    _langDropdownEl = document.createElement('div');
+    _langDropdownEl.className = 'lgh-lang-dropdown';
+    _langDropdownEl.setAttribute('role', 'listbox');
+
+    for (const lang of LANGUAGES) {
+      const opt = document.createElement('div');
+      opt.className = 'lgh-lang-option' + (lang.code === _currentLang ? ' active' : '');
+      opt.setAttribute('role', 'option');
+      opt.dataset.code = lang.code;
+
+      const flagEl = document.createElement('span');
+      flagEl.className = 'lgh-lang-option__flag';
+      flagEl.textContent = lang.flag;
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'lgh-lang-option__label';
+      labelEl.textContent = lang.label;
+
+      opt.appendChild(flagEl);
+      opt.appendChild(labelEl);
+      opt.addEventListener('click', () => _selectLang(lang.code));
+      _langDropdownEl.appendChild(opt);
+    }
+
+    wrap.appendChild(btn);
+    wrap.appendChild(_langDropdownEl);
+    return wrap;
+  }
+
+  function _toggleDropdown(e) {
+    e.stopPropagation();
+    const isOpen = _langDropdownEl.classList.toggle('lgh-open');
+    if (isOpen) {
+      setTimeout(() => document.addEventListener('click', _closeDropdown, { once: true }), 0);
+    }
+  }
+
+  function _closeDropdown() {
+    if (_langDropdownEl) _langDropdownEl.classList.remove('lgh-open');
+  }
+
+  function _selectLang(code) {
+    _closeDropdown();
+    updateLangDisplay(code);
+    chrome.storage.local.set({ lgh_targetLang: code });
+    if (typeof window.LGH.onLanguageChange === 'function') {
+      window.LGH.onLanguageChange(code);
+    }
+  }
 
   // ── Mount ──────────────────────────────────────────────────────────────────
 
   function mount(shadowRoot) {
     if (_panelEl) return; // idempotent
 
-    // FAB (visible on narrow screens via media query in panelHost CSS)
+    // Load persisted lang (async — updates display once result arrives)
+    chrome.storage.local.get('lgh_targetLang', function (result) {
+      const stored = result.lgh_targetLang || 'KO';
+      if (stored !== _currentLang) updateLangDisplay(stored);
+    });
+
+    // FAB for narrow screens
     _fabEl = document.createElement('button');
     _fabEl.className = 'lgh-fab lgh-fab--left';
     _fabEl.setAttribute('aria-label', 'Toggle job list translation panel');
@@ -47,13 +160,15 @@ window.LGH.LeftPanel = (function () {
     _panelEl.setAttribute('role', 'complementary');
     _panelEl.setAttribute('aria-label', 'Job List Translation');
 
-    // Header
+    // Header: [title][lang-selector][×]
     _headerEl = document.createElement('div');
     _headerEl.className = 'lgh-panel__header';
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'lgh-panel__title';
     titleSpan.textContent = 'Job List · Translation';
+
+    const langWrap = _buildLangSelector();
 
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'lgh-panel__toggle-btn';
@@ -63,6 +178,7 @@ window.LGH.LeftPanel = (function () {
     toggleBtn.addEventListener('click', _toggle);
 
     _headerEl.appendChild(titleSpan);
+    _headerEl.appendChild(langWrap);
     _headerEl.appendChild(toggleBtn);
 
     // Status bar
@@ -83,12 +199,17 @@ window.LGH.LeftPanel = (function () {
   // ── Unmount ────────────────────────────────────────────────────────────────
 
   function unmount() {
+    document.removeEventListener('click', _closeDropdown);
     if (_panelEl) { _panelEl.remove(); _panelEl = null; }
     if (_fabEl)   { _fabEl.remove();   _fabEl = null; }
-    _headerEl = null;
-    _statusEl = null;
-    _bodyEl   = null;
+    _headerEl        = null;
+    _statusEl        = null;
+    _bodyEl          = null;
+    _langBtnFlagEl   = null;
+    _langDropdownEl  = null;
+    _highlightedJobId = null;
     _cardMap.clear();
+    _linkedinCardMap.clear();
     _isOpen = false;
   }
 
@@ -109,11 +230,6 @@ window.LGH.LeftPanel = (function () {
 
   // ── Card management ────────────────────────────────────────────────────────
 
-  /**
-   * Show a loading placeholder card for a newly visible job.
-   * @param {string} jobId
-   * @param {{ title, company, location, snippet }} rawData — original (untranslated) text
-   */
   function markLoading(jobId, rawData) {
     const card = _getOrCreateCard(jobId);
     card.classList.add('lgh-loading');
@@ -127,22 +243,12 @@ window.LGH.LeftPanel = (function () {
     setStatus('Translating…', 'loading');
   }
 
-  /**
-   * Fill in the translated result for a card.
-   * @param {string} jobId
-   * @param {{ title, company, location, snippet }} translated
-   */
   function renderTranslation(jobId, translated) {
     const card = _getOrCreateCard(jobId);
     card.classList.remove('lgh-loading', 'lgh-error');
     _renderCardContent(card, translated);
   }
 
-  /**
-   * Mark a card as failed.
-   * @param {string} jobId
-   * @param {string} errMsg
-   */
   function markError(jobId, errMsg) {
     const card = _getOrCreateCard(jobId);
     card.classList.remove('lgh-loading');
@@ -153,11 +259,23 @@ window.LGH.LeftPanel = (function () {
     });
   }
 
-  /** Remove all cards — called on route change / job search reset. */
   function clearCards() {
     if (_bodyEl) _bodyEl.innerHTML = '';
     _cardMap.clear();
+    _linkedinCardMap.clear();
+    _highlightedJobId = null;
     setStatus('Scroll to translate cards');
+  }
+
+  /** Sync the flag button to `code` without opening the dropdown. */
+  function updateLangDisplay(code) {
+    _currentLang = code;
+    if (_langBtnFlagEl) _langBtnFlagEl.textContent = _flagForCode(code);
+    if (_langDropdownEl) {
+      _langDropdownEl.querySelectorAll('.lgh-lang-option').forEach(opt => {
+        opt.classList.toggle('active', opt.dataset.code === code);
+      });
+    }
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────
@@ -167,6 +285,18 @@ window.LGH.LeftPanel = (function () {
     const card = document.createElement('div');
     card.className = 'lgh-card';
     card.dataset.jobId = jobId;
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function () {
+      const linkedinCard = _linkedinCardMap.get(jobId);
+      if (!linkedinCard) return;
+      // Click the job anchor inside the LinkedIn card — triggers LinkedIn's own navigation
+      const anchor = linkedinCard.querySelector('a[href*="/jobs/view/"]');
+      if (anchor) {
+        anchor.click();
+      } else {
+        linkedinCard.click();
+      }
+    });
     if (_bodyEl) _bodyEl.appendChild(card);
     _cardMap.set(jobId, card);
     return card;
@@ -205,6 +335,63 @@ window.LGH.LeftPanel = (function () {
 
   function getBodyEl() { return _bodyEl; }
 
+  /**
+   * Highlight the translated card matching a hovered LinkedIn card, and
+   * auto-scroll the panel body so the card is centred.
+   *
+   * Stale-highlight safety: always clears the previous highlight before setting
+   * the new one, so recycled-DOM false-leaves never leave cards stuck green.
+   *
+   * @param {string}  jobId
+   * @param {boolean} active  — true = entering, false = leaving
+   */
+  function highlightCard(jobId, active) {
+    // ── Entering ────────────────────────────────────────────────────────────
+    if (active) {
+      // Clear any previously highlighted card (handles missed mouseleave)
+      if (_highlightedJobId && _highlightedJobId !== jobId) {
+        const prev = _cardMap.get(_highlightedJobId);
+        if (prev) prev.classList.remove('lgh-highlight');
+      }
+
+      const card = _cardMap.get(jobId);
+      if (!card) return;
+
+      card.classList.add('lgh-highlight');
+      _highlightedJobId = jobId;
+
+      // Auto-scroll: centre the card vertically in the panel body
+      if (_bodyEl) {
+        const cardRect = card.getBoundingClientRect();
+        const bodyRect = _bodyEl.getBoundingClientRect();
+        // Distance from the card's centre to the panel body's centre
+        const delta = (cardRect.top + cardRect.height / 2) -
+                      (bodyRect.top  + bodyRect.height / 2);
+        _bodyEl.scrollTop += delta;
+      }
+
+    // ── Leaving ─────────────────────────────────────────────────────────────
+    } else {
+      // Only clear if this job is still the active one
+      // (guards against recycled-element events with mismatched IDs)
+      if (_highlightedJobId === jobId) {
+        const card = _cardMap.get(jobId);
+        if (card) card.classList.remove('lgh-highlight');
+        _highlightedJobId = null;
+      }
+    }
+  }
+
+  /**
+   * Store the original LinkedIn card element for a jobId.
+   * Used to forward clicks from the translated card to the real LinkedIn card.
+   * @param {string}  jobId
+   * @param {Element} linkedinCardEl
+   */
+  function bindLinkedInCard(jobId, linkedinCardEl) {
+    if (jobId && linkedinCardEl) _linkedinCardMap.set(jobId, linkedinCardEl);
+  }
+
   return {
     mount,
     unmount,
@@ -213,6 +400,9 @@ window.LGH.LeftPanel = (function () {
     renderTranslation,
     markError,
     clearCards,
+    updateLangDisplay,
     getBodyEl,
+    highlightCard,
+    bindLinkedInCard,
   };
 })();
