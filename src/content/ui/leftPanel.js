@@ -289,13 +289,12 @@ window.LGH.LeftPanel = (function () {
     card.addEventListener('click', function () {
       const linkedinCard = _linkedinCardMap.get(jobId);
       if (!linkedinCard) return;
-      // Click the job anchor inside the LinkedIn card — triggers LinkedIn's own navigation
-      const anchor = linkedinCard.querySelector('a[href*="/jobs/view/"]');
-      if (anchor) {
-        anchor.click();
-      } else {
-        linkedinCard.click();
-      }
+      // Click the <li> element itself, NOT the <a> anchor inside it.
+      // LinkedIn uses event delegation on the list container — clicking the <li>
+      // lets LinkedIn's SPA handler intercept and update ?currentJobId= via
+      // history.pushState, loading the detail without full page navigation.
+      // Clicking the anchor directly bypasses that handler and causes full navigation.
+      linkedinCard.click();
     });
     if (_bodyEl) _bodyEl.appendChild(card);
     _cardMap.set(jobId, card);

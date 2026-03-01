@@ -107,11 +107,17 @@ window.LGH.extractDetailBlocks = function extractDetailBlocks(detailEl) {
 
   for (const sel of DESC_SELECTORS) {
     try {
-      const el = detailEl.querySelector(sel);
-      if (el && (el.textContent || '').trim().length >= MIN_DESC_CHARS) {
-        descEl = el;
-        break;
+      const els = detailEl.querySelectorAll(sel);
+      if (els.length === 0) continue;
+      // LinkedIn sometimes renders multiple elements matching the same selector
+      // (e.g. a summary section and the full description both use the same class).
+      // Always pick the one with the most text so we get the complete description.
+      let best = null, bestLen = 0;
+      for (const el of els) {
+        const len = (el.textContent || '').trim().length;
+        if (len > bestLen) { best = el; bestLen = len; }
       }
+      if (best && bestLen >= MIN_DESC_CHARS) { descEl = best; break; }
     } catch (_) {}
   }
 

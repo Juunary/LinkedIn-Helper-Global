@@ -20,14 +20,20 @@ window.LGH = window.LGH || {};
  *   findScrollContainer()    — returns the scrollable detail element (or null)
  */
 window.LGH.DetailObserver = (function () {
-  let _mutationObs          = null;
-  let _container            = null;
-  let _active               = false;
-  let _lastJobId            = null;
-  let _lastJobFullyExtracted = false; // true once we've fired with a full description
-  let _onDetailChange       = null;
-  let _attachRetries        = 0;
-  let _keepAliveTimer       = null;
+  let _mutationObs         = null;
+  let _container           = null;
+  let _active              = false;
+  let _lastJobId           = null;
+  let _lastFiredDescLength = 0;   // desc text length at last callback fire (0 = never fired)
+  let _onDetailChange      = null;
+  let _attachRetries       = 0;
+  let _keepAliveTimer      = null;
+
+  // Re-fire the callback for the same jobId only when the description has grown
+  // by at least this many characters. Guards against small DOM mutations (e.g. vote
+  // counts, timestamps) triggering a full re-translate, while still catching LinkedIn's
+  // lazy second-pass content injection for long job descriptions.
+  const REFIRE_MIN_GROWTH = 200;
 
   // Fast retry phase: every 600 ms for up to FAST_RETRIES attempts
   const FAST_RETRIES      = 20;
@@ -206,13 +212,10 @@ window.LGH.DetailObserver = (function () {
     const newJob = jobId !== _lastJobId;
     if (newJob) {
       // Switched to a different job — reset extraction state
-      _lastJobId             = jobId;
-      _lastJobFullyExtracted = false;
+      _lastJobId           = jobId;
+      _lastFiredDescLength = 0;
       console.log('[LGH] DetailObserver: new job detected', jobId);
     }
-
-    // Already fired with a complete description for this job — nothing to do
-    if (!newJob && _lastJobFullyExtracted) return;
 
     // Gate: wait until LinkedIn has populated the description pane
     const descText = _getDescriptionText();
@@ -221,13 +224,17 @@ window.LGH.DetailObserver = (function () {
     if (!ready) {
       console.log('[LGH] DetailObserver: description not ready yet for job', jobId,
         '(len=' + descText.length + ') — waiting for MutationObserver re-trigger');
-      // MutationObserver will call _scheduleCheck again as content loads.
-      // No polling needed — just return and let mutations drive retries.
       return;
     }
 
-    // Description is ready — extract and fire (once per job)
-    _lastJobFullyExtracted = true;
+    // Same job: only re-fire if description has grown significantly since last fire.
+    // This catches LinkedIn's lazy second-pass content injection (full description
+    // loads after the initial summary/TOC) without re-translating on every minor
+    // DOM mutation (vote counts, timestamps, etc.).
+    if (!newJob && descText.length < _lastFiredDescLength + REFIRE_MIN_GROWTH) return;
+
+    // Description is ready — extract and fire
+    _lastFiredDescLength = descText.length;
 
     const detailPayload = window.LGH.extractDetailBlocks(_container);
     const scrollEl      = findScrollContainer();
@@ -309,11 +316,11 @@ window.LGH.DetailObserver = (function () {
   function start(onDetailChange) {
     if (_active) stop();
 
-    _onDetailChange        = onDetailChange;
-    _active                = true;
-    _lastJobId             = null;
-    _lastJobFullyExtracted = false;
-    _attachRetries         = 0;
+    _onDetailChange      = onDetailChange;
+    _active              = true;
+    _lastJobId           = null;
+    _lastFiredDescLength = 0;
+    _attachRetries       = 0;
 
     _tryAttach();
   }
@@ -322,15 +329,15 @@ window.LGH.DetailObserver = (function () {
     _active = false;
     _stopKeepAlive();
     if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
-    _container             = null;
-    _lastJobId             = null;
-    _lastJobFullyExtracted = false;
-    _onDetailChange        = null;
+    _container           = null;
+    _lastJobId           = null;
+    _lastFiredDescLength = 0;
+    _onDetailChange      = null;
   }
 
   function resetLastJobId() {
-    _lastJobId             = null;
-    _lastJobFullyExtracted = false;
+    _lastJobId           = null;
+    _lastFiredDescLength = 0;
     // If we already have a container, re-check immediately
     if (_container && _active) _scheduleCheck();
   }
@@ -342,7 +349,7 @@ window.LGH.DetailObserver = (function () {
    */
   function retrigger() {
     if (_active && _container) {
-      _lastJobFullyExtracted = false; // allow re-fire for same jobId
+      _lastFiredDescLength = 0; // allow re-fire for same jobId
       _checkDetailChange();
     }
   }

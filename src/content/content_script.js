@@ -28,6 +28,14 @@
   }
 
   /**
+   * /jobs/view/<id>/ is a single-job page with no list pane.
+   * /jobs/search/ or /jobs/collections/ have the two-pane layout with a list.
+   */
+  function isSearchPage() {
+    return /linkedin\.com\/jobs\/(search|collections|recommended)/.test(location.href);
+  }
+
+  /**
    * Returns a stable key for the current search context by stripping currentJobId
    * from the URL. If two URLs produce the same key, only a job card was clicked
    * (the search results list is unchanged).
@@ -58,19 +66,25 @@
     LGH.LeftPanel.mount(shadow);
     LGH.RightPanel.mount(shadow);
 
-    LGH.ListObserver.start(
-      _onCardVisible,
-      function (listScrollEl) {
-        const leftBody = LGH.LeftPanel.getBodyEl();
-        if (listScrollEl && leftBody) {
-          LGH.ListScrollSync.attach(listScrollEl, leftBody);
-          log('ListScrollSync attached to', listScrollEl.className || listScrollEl.tagName);
+    // ListObserver only makes sense on two-pane search layouts.
+    // /jobs/view/<id>/ is a single-job page — no list container exists there.
+    if (isSearchPage()) {
+      LGH.ListObserver.start(
+        _onCardVisible,
+        function (listScrollEl) {
+          const leftBody = LGH.LeftPanel.getBodyEl();
+          if (listScrollEl && leftBody) {
+            LGH.ListScrollSync.attach(listScrollEl, leftBody);
+            log('ListScrollSync attached to', listScrollEl.className || listScrollEl.tagName);
+          }
+        },
+        function (jobId, isEntering) {
+          LGH.LeftPanel.highlightCard(jobId, isEntering);
         }
-      },
-      function (jobId, isEntering) {
-        LGH.LeftPanel.highlightCard(jobId, isEntering);
-      }
-    );
+      );
+    } else {
+      log('single-job page — ListObserver skipped');
+    }
     LGH.DetailObserver.start(_onDetailChange);
 
     _initialized = true;
@@ -220,6 +234,22 @@
         LGH.DetailObserver.resetLastJobId();
         LGH.RightPanel.clearDetail();
         LGH.ScrollSync.detach();
+
+        // If we just navigated TO a search page (e.g. from /jobs/view/ → /jobs/search/),
+        // ListObserver may not have been started yet — start it now.
+        if (isSearchPage() && !LGH.ListObserver.isActive()) {
+          log('navigated to search page — starting ListObserver');
+          LGH.ListObserver.start(
+            _onCardVisible,
+            function (listScrollEl) {
+              const leftBody = LGH.LeftPanel.getBodyEl();
+              if (listScrollEl && leftBody) LGH.ListScrollSync.attach(listScrollEl, leftBody);
+            },
+            function (jobId, isEntering) {
+              LGH.LeftPanel.highlightCard(jobId, isEntering);
+            }
+          );
+        }
 
         // List only resets when the search results themselves changed
         if (searchChanged) {

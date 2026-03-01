@@ -209,10 +209,23 @@ window.LGH.ListObserver = (function () {
 
   // ── Attach (with retry) ────────────────────────────────────────────────────
 
+  /**
+   * Returns true when the current URL is a single-job view (/jobs/view/<id>/).
+   * On such pages there is no list pane — retrying is pointless.
+   */
+  function _isSingleJobPage() {
+    return /\/jobs\/view\/\d+/.test(location.pathname);
+  }
+
   function _tryAttach() {
     _container = _findContainer();
 
     if (!_container) {
+      // Bail immediately on single-job pages — no list will ever appear
+      if (_isSingleJobPage()) {
+        console.log('[LGH] ListObserver: single-job page, list pane not present — skipping');
+        return;
+      }
       _attachRetries++;
       if (_attachRetries < MAX_RETRIES) {
         setTimeout(() => { if (_active) _tryAttach(); }, 600);
@@ -275,5 +288,7 @@ window.LGH.ListObserver = (function () {
     if (_active) _scheduleReflow();
   }
 
-  return { start, stop, clearRequestedIds, findScrollContainer };
+  function isActive() { return _active; }
+
+  return { start, stop, clearRequestedIds, findScrollContainer, isActive };
 })();

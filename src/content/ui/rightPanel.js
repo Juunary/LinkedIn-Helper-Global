@@ -188,6 +188,13 @@ window.LGH.RightPanel = (function () {
         const tr   = (typeof field === 'object') ? (field.translated || '') : String(field);
         if (!orig && !tr) continue;
 
+        // For location: strip trailing metadata appended by LinkedIn
+        // e.g. "Munich, Bavaria · Reposted 15 hours ago · 30 people clicked apply…"
+        //   → "Munich, Bavaria"
+        const copyText = key === 'location'
+          ? orig.replace(/\s*·\s*(Reposted|Posted|Promoted|Easy Apply).*/i, '').trim()
+          : orig;
+
         const row = document.createElement('div');
         row.className = ('lgh-meta-row ' + rowClass).trim();
 
@@ -197,13 +204,12 @@ window.LGH.RightPanel = (function () {
           origEl.textContent = orig;
           origEl.title = 'Click to copy';
           origEl.addEventListener('click', function () {
-            navigator.clipboard.writeText(orig).then(function () {
+            navigator.clipboard.writeText(copyText).then(function () {
               _showCopyToast(origEl);
             }).catch(function () {
-              // fallback for clipboard API unavailability
               try {
                 const ta = document.createElement('textarea');
-                ta.value = orig;
+                ta.value = copyText;
                 ta.style.cssText = 'position:fixed;opacity:0';
                 document.body.appendChild(ta);
                 ta.select();
