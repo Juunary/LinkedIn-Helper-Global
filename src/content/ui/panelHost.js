@@ -248,6 +248,87 @@ window.LGH.PanelHost = (function () {
     .lgh-meta__translated  { font-size: 13px; font-weight: 600; color: #1d2226; line-height: 1.3; }
     .lgh-meta-row--title .lgh-meta__translated { font-size: 15px; color: #0a66c2; }
 
+    /* ── Selection Translator ─────────────────────────────────── */
+
+    /* Floating "번역" button that appears to the right of a text selection */
+    .lgh-sel-btn {
+      position: fixed;
+      z-index: 9999;
+      background: #0a66c2;
+      color: #ffffff;
+      border: none;
+      border-radius: 11px;
+      padding: 3px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+      white-space: nowrap;
+      user-select: none;
+      transition: background 0.15s, transform 0.1s;
+      pointer-events: auto;
+    }
+    .lgh-sel-btn:hover  { background: #004182; }
+    .lgh-sel-btn:active { transform: scale(0.95); }
+
+    /* Result popup */
+    .lgh-sel-popup {
+      position: fixed;
+      z-index: 9999;
+      background: #ffffff;
+      border: 1px solid #d0dce8;
+      border-radius: 8px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.18);
+      padding: 10px 12px 11px;
+      max-width: 295px;
+      min-width: 180px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font-size: 13px;
+      color: #1d2226;
+      pointer-events: auto;
+    }
+
+    .lgh-sel-popup__close {
+      float: right;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 17px;
+      line-height: 1;
+      color: #aaaaaa;
+      padding: 0 0 4px 6px;
+      margin-left: 4px;
+    }
+    .lgh-sel-popup__close:hover { color: #333333; }
+
+    .lgh-sel-popup__original {
+      font-size: 11px;
+      color: #999999;
+      margin-bottom: 7px;
+      padding-bottom: 7px;
+      border-bottom: 1px dashed #e0e0e0;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .lgh-sel-popup__body {
+      font-size: 13px;
+      font-weight: 500;
+      color: #1d2226;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .lgh-sel-popup__body--loading {
+      color: #0a66c2;
+      font-weight: 400;
+      font-style: italic;
+    }
+    .lgh-sel-popup__body--error {
+      font-size: 12px;
+      font-weight: 400;
+      color: #b91c1c;
+    }
+
     /* ── FAB toggle buttons (shown on narrow screens) ─────────── */
     .lgh-fab {
       position: fixed;

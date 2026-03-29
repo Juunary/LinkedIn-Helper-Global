@@ -33,7 +33,7 @@ window.LGH.DetailObserver = (function () {
   // by at least this many characters. Guards against small DOM mutations (e.g. vote
   // counts, timestamps) triggering a full re-translate, while still catching LinkedIn's
   // lazy second-pass content injection for long job descriptions.
-  const REFIRE_MIN_GROWTH = 200;
+  const REFIRE_MIN_GROWTH = 100;
 
   // Fast retry phase: every 600 ms for up to FAST_RETRIES attempts
   const FAST_RETRIES      = 20;
@@ -175,13 +175,44 @@ window.LGH.DetailObserver = (function () {
   // because "job-description" is not a substring of "jobs-description" (the 's' differs).
   // Selectors below are explicit.
   const DESC_READY_SELECTORS = [
-    '.jobs-description__details',
-    '[class*="jobs-description__details"]',
     '#job-details',
+    '.jobs-description__text--rich',
+    '[class*="jobs-description__text"]',
+    '[class*="show-more-less-html__markup"]',
     '.jobs-description-content__text',
     '.jobs-description-content',
     '.jobs-box__html-content',
+    '.jobs-description__details',
+    '[class*="jobs-description__details"]',
   ];
+
+  // ── "See more" expansion ───────────────────────────────────────────────────
+
+  // LinkedIn truncates long job descriptions behind a "See more" button.
+  // Click it once (if present) so the full text is injected into the DOM,
+  // which then triggers another MutationObserver cycle and re-extraction.
+  const SEE_MORE_SELECTORS = [
+    '.jobs-description__see-more-button',
+    '.show-more-less-html__button--more',
+    '[class*="show-more-less-html__button"][class*="more"]',
+    'button[aria-label*="See more"]',
+    'button[aria-label*="more description"]',
+  ];
+
+  function _expandDescription() {
+    if (!_container) return;
+    for (const sel of SEE_MORE_SELECTORS) {
+      try {
+        const btn = _container.querySelector(sel);
+        // offsetParent is null for display:none elements — skip those
+        if (btn && btn.offsetParent !== null) {
+          btn.click();
+          console.log('[LGH] DetailObserver: expanded "See more" —', sel);
+          return;
+        }
+      } catch (_) {}
+    }
+  }
 
   function _getDescriptionText() {
     if (!_container) return '';
@@ -232,6 +263,12 @@ window.LGH.DetailObserver = (function () {
     // loads after the initial summary/TOC) without re-translating on every minor
     // DOM mutation (vote counts, timestamps, etc.).
     if (!newJob && descText.length < _lastFiredDescLength + REFIRE_MIN_GROWTH) return;
+
+    // Attempt to expand any "See more" button before extracting.
+    // If content was lazy-loaded, clicking it triggers a DOM mutation → the
+    // observer re-fires with the full text, so we return early and let that
+    // next cycle do the actual extraction.
+    _expandDescription();
 
     // Description is ready — extract and fire
     _lastFiredDescLength = descText.length;

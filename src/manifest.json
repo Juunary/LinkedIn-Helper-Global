@@ -26,6 +26,7 @@
         "content/ui/panelHost.js",
         "content/ui/leftPanel.js",
         "content/ui/rightPanel.js",
+        "content/ui/selectionTranslator.js",
         "content/sync/scrollSync.js",
         "content/observers/routeObserver.js",
         "content/observers/listObserver.js",

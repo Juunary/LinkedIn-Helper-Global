@@ -215,6 +215,43 @@ async function handleDetail(jobId, payload, settings) {
   return { type: 'TRANSLATE_RESULT', jobId, scope: 'DETAIL', translated: result };
 }
 
+// ── SELECTION scope handler ────────────────────────────────────────────────
+
+/**
+ * Translate a single user-selected text string.
+ * Uses a namespaced cache key (prefix '\x00sel\x00') to avoid collisions
+ * with LIST / DETAIL cache entries.
+ */
+async function handleSelection(jobId, payload, settings) {
+  const {
+    lgh_apiKey:     apiKey     = '',
+    lgh_targetLang: targetLang = 'KO',
+    lgh_provider:   provider   = 'deepl',
+  } = settings;
+
+  if (!apiKey) {
+    return { type: 'TRANSLATE_ERROR', jobId, scope: 'SELECTION', error: 'NO_API_KEY' };
+  }
+
+  const text = (payload && payload.text) || '';
+  if (!text) {
+    return { type: 'TRANSLATE_RESULT', jobId, scope: 'SELECTION', translated: '' };
+  }
+
+  const cacheKey = '\x00sel\x00' + text;
+  const cached   = await Cache.get(cacheKey, targetLang);
+  if (typeof cached === 'string') {
+    console.log(LOG, 'cache hit SELECTION');
+    return { type: 'TRANSLATE_RESULT', jobId, scope: 'SELECTION', translated: cached };
+  }
+
+  const results    = await callTranslator([text], targetLang, apiKey, provider);
+  const translated = results[0] || '';
+  await Cache.set(cacheKey, targetLang, translated);
+
+  return { type: 'TRANSLATE_RESULT', jobId, scope: 'SELECTION', translated };
+}
+
 // ── Message listener ───────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
@@ -236,6 +273,8 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         response = await handleList(jobId, payload, settings);
       } else if (scope === 'DETAIL') {
         response = await handleDetail(jobId, payload, settings);
+      } else if (scope === 'SELECTION') {
+        response = await handleSelection(jobId, payload, settings);
       } else {
         response = { type: 'TRANSLATE_ERROR', jobId, scope, error: `Unknown scope: ${scope}` };
       }

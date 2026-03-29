@@ -88,16 +88,24 @@ window.LGH.extractDetailBlocks = function extractDetailBlocks(detailEl) {
   // "jobs-description__details" because "job-description" ≠ "jobs-description"
   // (the leading 's' breaks substring match). Selectors must be explicit.
   const DESC_SELECTORS = [
-    // Current LinkedIn layout (2024-2026): the description wrapper
-    '.jobs-description__details',
-    // Alternate container names observed in the wild
-    '[class*="jobs-description__details"]',
+    // Most reliable: LinkedIn's dedicated job-details ID container
     '#job-details',
+    // Rich-text wrappers — contain the actual narrative HTML
+    '.jobs-description__text--rich',
+    '[class*="jobs-description__text"]',
+    // show-more/less markup area (the HTML inside the expand widget)
+    '[class*="show-more-less-html__markup"]',
+    // Alternate container names observed in the wild
     '.jobs-description-content__text',
     '.jobs-box__html-content',
     '.jobs-description__content',
     '.jobs-description-content',
     '.jobs-description__container',
+    // NOTE: kept as late fallback — on some layouts this class matches the
+    // job-criteria metadata panel (Full-time / Mid-Senior level) rather than
+    // the narrative text, so it must NOT be the first candidate.
+    '.jobs-description__details',
+    '[class*="jobs-description__details"]',
     '[class*="jobs-description__container"]',
     '[class*="jobs-description-content"]',
   ];

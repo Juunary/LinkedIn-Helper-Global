@@ -65,6 +65,7 @@
 
     LGH.LeftPanel.mount(shadow);
     LGH.RightPanel.mount(shadow);
+    LGH.SelectionTranslator.mount(shadow);
 
     // ListObserver only makes sense on two-pane search layouts.
     // /jobs/view/<id>/ is a single-job page — no list container exists there.
@@ -99,6 +100,7 @@
     LGH.ScrollSync.detach();
     LGH.ListScrollSync.detach();
 
+    LGH.SelectionTranslator.unmount();
     LGH.LeftPanel.unmount();
     LGH.RightPanel.unmount();
     LGH.PanelHost.unmount();
